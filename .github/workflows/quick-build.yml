@@ -84,7 +84,7 @@ jobs:
           cd flashable && zip -r9 ../nethunter-sm4250.zip . && cd ..
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: nethunter-kernel
           path: nethunter-sm4250.zip
