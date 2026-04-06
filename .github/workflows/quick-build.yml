@@ -1,0 +1,101 @@
+name: Build NetHunter Kernel - SM4250
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        default: 'full'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 240
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Maximize build space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 512
+          swap-size-mb: 2048
+          remove-dotnet: 'true'
+          remove-android: 'true'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential libncurses-dev bison flex \
+            libssl-dev libelf-dev bc wget git python3 \
+            device-tree-compiler ccache zip unzip
+
+      - name: Download NDK
+        run: |
+          mkdir -p ~/ndk && cd ~/ndk
+          wget -q https://dl.google.com/android/repository/android-ndk-r21e-linux-x86_64.zip
+          unzip -q android-ndk-r21e-linux-x86_64.zip
+
+      - name: Setup environment
+        run: |
+          export NDK_PATH=$HOME/ndk/android-ndk-r21e
+          export CROSS_COMPILE=$NDK_PATH/toolchains/aarch64-linux-android-4.9/prebuilt/linux-x86_64/bin/aarch64-linux-android-
+          export ARCH=arm64
+          echo "CROSS_COMPILE=$CROSS_COMPILE" >> $GITHUB_ENV
+          echo "ARCH=arm64" >> $GITHUB_ENV
+
+      - name: Setup ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          max-size: "3G"
+
+      - name: Configure kernel
+        run: |
+          make O=out ARCH=arm64 vendor/Bengal_defconfig
+
+      - name: Build kernel
+        run: |
+          make O=out ARCH=arm64 -j$(nproc)
+
+      - name: Create flashable ZIP
+        run: |
+          mkdir -p flashable/META-INF/com/google/android
+          cp out/arch/arm64/boot/Image.gz-dtb flashable/kernel
+          
+          cat > flashable/device.prop << 'EOF'
+          device.name1=OnePlus Nord N100
+          device.name2=BE2013
+          device.name3=Bengal
+          block=/dev/block/bootdevice/by-name/boot_a
+          block=/dev/block/bootdevice/by-name/boot_b
+          is_slot_device=1
+          EOF
+          
+          cat > flashable/META-INF/com/google/android/update-binary << 'SCRIPT'
+          #!/sbin/sh
+          OUTFD=$2
+          ui_print() { echo "ui_print $1" >> /proc/self/fd/$OUTFD; }
+          ui_print "NetHunter Kernel SM4250"
+          SCRIPT
+          chmod +x flashable/META-INF/com/google/android/update-binary
+          
+          cd flashable && zip -r9 ../nethunter-sm4250.zip . && cd ..
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: nethunter-kernel
+          path: nethunter-sm4250.zip
+          retention-days: 30
+
+      - name: Create release
+        if: success()
+        uses: softprops/action-gh-release@v1
+        with:
+          files: nethunter-sm4250.zip
+          tag_name: build-${{ github.run_number }}
+          name: "NetHunter Kernel #${{ github.run_number }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
